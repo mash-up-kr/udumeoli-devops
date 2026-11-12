@@ -1,0 +1,57 @@
+name: Deploy health monitor
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-health-monitor
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Copy and install health monitor
+        env:
+          SSH_HOST: ${{ vars.HEALTH_MONITOR_SSH_HOST }}
+          SSH_KNOWN_HOSTS: ${{ vars.HEALTH_MONITOR_SSH_KNOWN_HOSTS }}
+          SSH_PRIVATE_KEY: ${{ secrets.HEALTH_MONITOR_SSH_KEY }}
+        shell: bash
+        run: |
+          if [[ -z "$SSH_PRIVATE_KEY" ]]; then
+            echo '::error::Set the HEALTH_MONITOR_SSH_KEY repository secret before deploying.'
+            exit 1
+          fi
+          if [[ -z "$SSH_HOST" || -z "$SSH_KNOWN_HOSTS" ]]; then
+            echo '::error::Set the health monitor SSH host and known-hosts repository variables.'
+            exit 1
+          fi
+
+          umask 077
+          ssh_dir=$(mktemp -d)
+          trap 'rm -rf "$ssh_dir"' EXIT
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$ssh_dir/key"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$ssh_dir/known_hosts"
+          ssh_options=(
+            -i "$ssh_dir/key" -o BatchMode=yes -o IdentitiesOnly=yes
+            -o ConnectTimeout=15 -o StrictHostKeyChecking=yes
+            -o "UserKnownHostsFile=$ssh_dir/known_hosts"
+          )
+
+          server="deploy@$SSH_HOST"
+          incoming=".health_monitor.py.$GITHUB_RUN_ID.$GITHUB_RUN_ATTEMPT"
+          scp "${ssh_options[@]}" health_monitor.py "$server:health-monitor/$incoming"
+          ssh "${ssh_options[@]}" "$server" sh -s -- "$incoming" <<'REMOTE'
+          set -eu
+          cd health-monitor
+          chmod 600 "$1"
+          mv -f "$1" health_monitor.py
+          REMOTE
