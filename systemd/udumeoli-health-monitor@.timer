@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the Udumeoli health check every minute (%i)
+
+[Timer]
+OnCalendar=minutely
+AccuracySec=1s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

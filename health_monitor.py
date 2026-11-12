@@ -60,6 +60,7 @@ def send_discord(url, message):
 
 def run(directory, now):
     config = read_config(directory / ".env")
+    service_name = config.get("SERVICE_NAME", "udumeoli")
     failure = check_health(config["HEALTH_URL"])
     daily_state = directory / ".last-daily-status"
     today = now.date().isoformat()
@@ -76,14 +77,14 @@ def run(directory, now):
     if daily_due and failure:
         title = "일일 상태 · 장애 알림"
     status = f"🔴 비정상 · {failure}" if failure else "🟢 정상 · UP"
-    message = f"**udumeoli {title}**\n{status}\n{now:%Y-%m-%d %H:%M} KST"
+    message = f"**{service_name} {title}**\n{status}\n{now:%Y-%m-%d %H:%M} KST"
     send_discord(config["DISCORD_WEBHOOK_URL"], message)
 
     if daily_due:
         temporary_state = daily_state.with_suffix(".tmp")
         temporary_state.write_text(f"{today}\n", encoding="utf-8")
         temporary_state.replace(daily_state)
-    print(f"Discord 알림 전송 완료 · {title} · {now:%Y-%m-%d %H:%M} KST")
+    print(f"Discord 알림 전송 완료 · {service_name} · {title} · {now:%Y-%m-%d %H:%M} KST")
 
 
 if __name__ == "__main__":
