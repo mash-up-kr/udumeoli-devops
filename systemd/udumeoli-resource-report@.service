@@ -1,0 +1,13 @@
+[Unit]
+Description=Udumeoli resource report (%i)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=%i
+WorkingDirectory=/home/%i/health-monitor
+ExecStart=/usr/bin/python3 /home/%i/health-monitor/health_monitor.py resources
+TimeoutStartSec=30s
+UMask=0077
+NoNewPrivileges=true
