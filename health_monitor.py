@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo
 SEOUL = ZoneInfo("Asia/Seoul")
 DAILY_REPORT_TIME = time(9, 0)
 REQUEST_TIMEOUT = 8
+MEMORY_WARNING_PERCENT = 85
 
 
 def read_config(path):
@@ -103,6 +104,44 @@ def format_usage(used, total, unit, divisor):
     return f"{used / divisor:.1f} / {total / divisor:.1f} {unit} ({percent:.1f}%)"
 
 
+def read_memory():
+    memory = {}
+    for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+        name, value = line.split(":", 1)
+        if name in ("MemTotal", "MemAvailable", "SwapTotal", "SwapFree"):
+            memory[name] = int(value.split()[0])
+    return memory
+
+
+def memory_is_high(used, total):
+    return used * 100 >= total * MEMORY_WARNING_PERCENT
+
+
+def warn_memory(directory, now):
+    memory = read_memory()
+    total = memory["MemTotal"]
+    used = total - memory["MemAvailable"]
+    warning_state = directory / ".memory-warning"
+
+    if not memory_is_high(used, total):
+        warning_state.unlink(missing_ok=True)
+        return
+    if warning_state.exists():
+        return
+
+    config = read_config(directory / ".env")
+    host_name = config.get("RESOURCE_HOST_NAME", socket.gethostname())
+    ram = format_usage(used, total, "MiB", 1024)
+    message = (
+        f"🔴 **{host_name} 메모리 위험**\n"
+        f"메모리 · {ram} · 기준 {MEMORY_WARNING_PERCENT}% 이상\n"
+        f"{now:%Y-%m-%d %H:%M} KST"
+    )
+    send_discord(config["DISCORD_WEBHOOK_URL"], message)
+    warning_state.touch()
+    print(f"Discord 메모리 위험 알림 전송 완료 · {host_name} · {now:%Y-%m-%d %H:%M} KST")
+
+
 def report_resources(directory, now):
     config = read_config(directory / ".env")
     host_name = config.get("RESOURCE_HOST_NAME", socket.gethostname())
@@ -113,12 +152,12 @@ def report_resources(directory, now):
     elapsed = total_after - total_before
     cpu = 100 * (busy_after - busy_before) / elapsed if elapsed > 0 else 0
 
-    memory = {}
-    for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
-        name, value = line.split(":", 1)
-        if name in ("MemTotal", "MemAvailable", "SwapTotal", "SwapFree"):
-            memory[name] = int(value.split()[0])
-    ram = format_usage(memory["MemTotal"] - memory["MemAvailable"], memory["MemTotal"], "MiB", 1024)
+    memory = read_memory()
+    ram_total = memory["MemTotal"]
+    ram_used = ram_total - memory["MemAvailable"]
+    ram = format_usage(ram_used, ram_total, "MiB", 1024)
+    if memory_is_high(ram_used, ram_total):
+        ram += " · 🔴 위험"
     swap = format_usage(memory["SwapTotal"] - memory["SwapFree"], memory["SwapTotal"], "MiB", 1024)
     disk = shutil.disk_usage("/")
     root = format_usage(disk.used, disk.total, "GiB", 1024**3)
@@ -140,9 +179,16 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Udumeoli monitoring")
     parser.add_argument("mode", nargs="?", default="health", choices=("health", "resources"))
     args = parser.parse_args()
-    monitor = report_resources if args.mode == "resources" else run
+    directory = Path(__file__).resolve().parent
+    now = datetime.now(SEOUL)
     try:
-        monitor(Path(__file__).resolve().parent, datetime.now(SEOUL))
+        if args.mode == "resources":
+            report_resources(directory, now)
+        else:
+            try:
+                run(directory, now)
+            finally:
+                warn_memory(directory, now)
     except HTTPError as error:
         sys.exit(f"Discord 전송 실패 · HTTP {error.code}")
     except (KeyError, OSError, ValueError, HTTPException) as error:

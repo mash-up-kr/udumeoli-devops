@@ -1,3 +1,4 @@
 .env
 .last-daily-status*
+.memory-warning
 __pycache__/
